@@ -1,0 +1,698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Morphwave</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: full-bleed WebGL canvas, glass control dock pinned to the bottom, tiny HUD on top. Single dark look on purpose. */
+:root{
+  --bg:#07060b;
+  --ink:#efeaf6;
+  --dim:#958fab;
+  --glass:rgba(14,11,24,.78);
+  --line:rgba(239,234,246,.13);
+  --hot:#ff5fa2;
+  --cool:#5fe3ff;
+  --f-ui:"Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;font-family:var(--f-ui)}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+.top{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
+  padding-top:calc(env(safe-area-inset-top,0px) + 12px);
+  padding-left:max(16px, env(safe-area-inset-left,0px));padding-right:max(16px, env(safe-area-inset-right,0px));
+  pointer-events:none}
+.brand{font-weight:800;font-size:15px;letter-spacing:.02em;text-shadow:0 1px 8px rgba(0,0,0,.6)}
+.brand span{font-family:var(--f-mono);font-weight:400;font-size:12px;color:var(--dim);margin-left:8px;text-transform:uppercase;letter-spacing:.08em}
+.meters{display:flex;gap:4px;align-items:flex-end;height:28px;padding:5px 6px;border-radius:8px;background:rgba(0,0,0,.35)}
+.meters i{display:block;width:6px;height:100%;transform-origin:bottom;transform:scaleY(.05);border-radius:2px;background:var(--cool)}
+.meters i:last-child{background:var(--hot)}
+
+.dock{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:760px;
+  background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;
+  padding-block:12px calc(env(safe-area-inset-bottom,0px) + 12px);
+  padding-left:max(16px, env(safe-area-inset-left,0px));padding-right:max(16px, env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+.btn{font:600 13px var(--f-ui);color:var(--ink);background:rgba(239,234,246,.07);border:1px solid var(--line);
+  border-radius:999px;padding:8px 13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;user-select:none}
+.btn:hover{background:rgba(239,234,246,.13)}
+.btn:focus-visible,.chip:focus-visible,input[type=range]:focus-visible{outline:2px solid var(--cool);outline-offset:2px}
+.btn.on{background:var(--hot);border-color:var(--hot);color:#16070f}
+.btn.ghost{margin-left:auto}
+
+.modes{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;margin-inline:-2px}
+.modes::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;font:600 13px var(--f-ui);color:var(--ink);background:transparent;border:1px solid var(--line);
+  border-radius:10px;padding:7px 11px;cursor:pointer;display:flex;gap:7px;align-items:baseline}
+.chip b{font:400 11px var(--f-mono);color:var(--dim)}
+.chip.on{border-color:var(--cool);background:rgba(95,227,255,.14)}
+.chip.on b{color:var(--cool)}
+
+.sliders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px}
+@media (min-width:640px){.sliders{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.sl{display:flex;flex-direction:column;gap:4px;min-width:0}
+.sl label{display:flex;justify-content:space-between;font:600 11px var(--f-ui);text-transform:uppercase;letter-spacing:.09em;color:var(--dim)}
+.sl label output{font:400 11px var(--f-mono);color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:0}
+.sl input{width:100%;accent-color:var(--hot);margin:0}
+
+.status{margin:0;font-size:12.5px;color:var(--dim);line-height:1.4}
+.status strong{color:var(--ink);font-weight:600}
+
+.show{position:fixed;right:max(16px, env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 16px)}
+.drop{position:fixed;inset:12px;border:2px dashed var(--cool);border-radius:20px;display:grid;place-items:center;
+  font:800 22px var(--f-ui);background:rgba(7,6,11,.55);pointer-events:none}
+@media (prefers-reduced-motion: reduce){.meters i{transition:none}}
+</style>
+</head>
+<body>
+
+<canvas id="gl"></canvas>
+
+<header class="top">
+  <div class="brand">Morphwave<span id="modeName">smear</span></div>
+  <div class="meters" aria-hidden="true"><i id="mB"></i><i id="mM"></i><i id="mH"></i><i id="mK"></i></div>
+</header>
+
+<div class="drop" id="drop" hidden>Drop image, video or audio</div>
+
+<section class="dock" id="dock" aria-label="Visualizer controls">
+  <div class="row">
+    <button class="btn" id="btnDemo" type="button">Play demo beat</button>
+    <label class="btn" for="inAudio">Audio file</label>
+    <input id="inAudio" type="file" accept="audio/*" hidden>
+    <button class="btn" id="btnMic" type="button">Mic</button>
+    <button class="btn" id="btnCam" type="button">Camera</button>
+    <label class="btn" for="inMedia">Image / video</label>
+    <input id="inMedia" type="file" accept="image/*,video/*" hidden>
+    <button class="btn" id="btnShuffle" type="button">Shuffle</button>
+    <button class="btn ghost" id="btnHide" type="button">Hide</button>
+  </div>
+  <div class="modes" id="modes" role="group" aria-label="Mode"></div>
+  <div class="sliders" id="sliders"></div>
+  <p class="status" id="status">Tap <strong>Play demo beat</strong> to hear it react, then drop in your own photo or video.</p>
+</section>
+<button class="btn show" id="btnShow" type="button" hidden>Controls</button>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+/* =========================================================
+   Morphwave v0.1 — audio-reactive image/video visualizer
+   Sections (map to future files in the Vite repo):
+   1. shaders   2. renderer   3. media   4. audio   5. ui   6. loop
+   ========================================================= */
+
+const $ = id => document.getElementById(id);
+const statusEl = $('status');
+const say = html => { statusEl.innerHTML = html; };
+
+/* ---------------- 1. SHADERS ---------------- */
+const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`;
+
+const MODE_FS = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uTex, uPrev;
+uniform vec2 uRes;
+uniform float uTexAspect, uTime, uDive, uKickCount;
+uniform float uBass, uMid, uHigh, uKick, uEnergy;
+uniform float uReact, uChaos, uTrails, uHeat, uSym, uTwist, uMode;
+uniform vec3 uAccent;
+uniform float uFlip;
+#define PI 3.14159265
+
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+vec2 hash2(vec2 p){ return fract(sin(vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3))))*43758.5453); }
+float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x), mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x), f.y); }
+float fbm(vec2 p){ float v=0., a=.5; for(int i=0;i<5;i++){ v+=a*noise(p); p=p*2.03+17.1; a*=.5; } return v; }
+mat2 rot(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
+vec2 mirr(vec2 q){ vec2 m=mod(q,2.); return mix(m, 2.-m, step(1.,m)); }
+float asp(){ return uRes.x/uRes.y; }
+float luma(vec3 c){ return dot(c, vec3(.299,.587,.114)); }
+vec2 toC(vec2 uv){ return (uv-.5)*vec2(asp(),1.); }
+vec2 toUV(vec2 c){ return c/vec2(asp(),1.)+.5; }
+
+// sample the source image with "cover" fit and mirrored edges
+vec3 img(vec2 uv){
+  vec2 p = uv - .5; float sa = asp();
+  if (sa > uTexAspect) p.y *= uTexAspect/sa; else p.x *= sa/uTexAspect;
+  p.x *= uFlip;
+  return texture2D(uTex, mirr(p + .5)).rgb;
+}
+
+void main(){
+  float t = uTime, R = uReact;
+  float bass=uBass*R, mid=uMid*R, high=uHigh*R, kick=uKick*R, en=uEnergy*R;
+
+  // ---- frame transforms: twist + symmetry ----
+  vec2 c = toC(vUv);
+  if (abs(uTwist) > .001) c *= rot(uTwist * (1.2 - length(c)) * (1. + bass*.6));
+  if (uSym > .5) {
+    if (uSym < 1.5) c.x = abs(c.x);
+    else { float n=floor(uSym), seg=PI/n; float a=atan(c.y,c.x)+t*.05; a=mod(a,2.*seg); a=abs(a-seg); c=length(c)*vec2(cos(a),sin(a)); }
+  }
+  vec2 uv = toUV(c);
+  vec3 col;
+  float m = uMode;
+
+  if (m < .5) {                         // 0 none
+    col = img(uv);
+  } else if (m < 1.5) {                 // 1 smear: domain-warp drag
+    float s = (.03 + .12*uChaos) * (.4 + bass*1.4 + kick*.8);
+    vec2 w  = vec2(fbm(uv*3.+vec2(t*.15,0.)), fbm(uv*3.+vec2(5.2,-t*.12)));
+    vec2 w2 = vec2(fbm(uv*2.+w*2.+t*.1), fbm(uv*2.+w*2.-t*.1+3.));
+    col = img(uv + (w2-.5)*s*2.);
+  } else if (m < 2.5) {                 // 2 droste: log-polar spiral
+    float r = length(c)+1e-4, a = atan(c.y,c.x);
+    float S = log(2.);
+    float lr = log(r) - uDive*.6;
+    a += log(r)*uChaos*.6 + mid*.15;
+    float rr = .25*exp(mod(lr, S));
+    col = img(toUV(rr*vec2(cos(a),sin(a))));
+    col += uAccent * uHeat * kick * .5 * smoothstep(.04, 0., mod(lr,S));
+  } else if (m < 3.5) {                 // 3 shatter: voronoi that kicks explode
+    float sc = 3. + uChaos*7.;
+    vec2 p = uv*vec2(asp(),1.)*sc, ip=floor(p), fp=fract(p);
+    float d1=8., d2=8.; vec2 id=vec2(0.);
+    for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){
+      vec2 g=vec2(float(i),float(j));
+      vec2 o=hash2(ip+g+uKickCount*.37); o=.5+.4*sin(t*.4+6.2831*o);
+      float d=length(g+o-fp);
+      if(d<d1){ d2=d1; d1=d; id=ip+g; } else if(d<d2){ d2=d; }
+    }
+    vec2 rnd = hash2(id + uKickCount);
+    vec2 off = (rnd-.5)*(kick*.25 + bass*.04);
+    vec2 cc = rot((rnd.x-.5)*kick*.6)*(uv-.5);
+    col = img(cc+.5+off);
+    float edge = smoothstep(0., .06, d2-d1);
+    col = mix(uAccent*(.5+uHeat*(kick*1.5+high*.5)), col, edge);
+  } else if (m < 4.5) {                 // 4 prism: per-channel tears
+    float bands = 12. + uChaos*40.;
+    float b = floor(uv.y*bands);
+    float tear = (hash(vec2(b, floor(t*10.)))-.5) * (high*.12 + kick*.18) * (.3+uChaos);
+    float off = .004 + .02*bass*uChaos + kick*.02;
+    vec2 u2 = uv + vec2(tear, 0.);
+    col = vec3(img(u2+vec2(off,0.)).r, img(u2).g, img(u2-vec2(off,0.)).b);
+  } else if (m < 5.5) {                 // 5 infinite: picture recedes into itself
+    float mm = max(abs(c.x)/(asp()*.5), abs(c.y)/.5) + 1e-4;
+    float g = -log2(mm) + uDive, k = floor(g);
+    vec2 lc = c*exp2(k - uDive);
+    float lm = mm*exp2(k - uDive);
+    col = img(toUV(lc));
+    col *= mix(1., .45, clamp(-log2(mm)/6., 0., 1.));
+    col += uAccent * smoothstep(.93, .995, lm) * (.4 + uHeat*(kick*2.+mid));
+  } else if (m < 6.5) {                 // 6 halftone: rotated dot screen
+    float cell = mix(.045, .012, uChaos) * (1. - bass*.25);
+    float ang = .4 + uKickCount*.26;
+    vec2 p = c*rot(ang);
+    vec2 cp = (floor(p/cell)+.5)*cell;
+    vec3 sc = img(toUV(cp*rot(-ang)));
+    float rad = cell*.5*sqrt(luma(sc))*(1.1 + kick*.4);
+    col = sc * smoothstep(rad, rad-cell*.12, length(p-cp)) * (1.2 + high*.4);
+  } else if (m < 7.5) {                 // 7 solar: wandering negative flip
+    vec2 w = vec2(fbm(uv*2.+t*.1), fbm(uv*2.-t*.1))-.5;
+    col = img(uv + w*.02*(1.+bass));
+    float L = luma(col);
+    float thr = .55 + .25*sin(t*.35) - kick*.25 - uChaos*.15;
+    col = mix(col, (1.-col)*mix(vec3(1.), uAccent*1.4, .5), smoothstep(thr-.03, thr+.03, L));
+  } else if (m < 8.5) {                 // 8 melt: feedback advection drips
+    float n1 = fbm(uv*4. + vec2(0., t*.2));
+    vec2 flow = vec2((n1-.5)*.006, .0015 + .006*uChaos*(.4+bass));
+    vec3 prev = texture2D(uPrev, vUv + flow).rgb;
+    vec3 fresh = img(uv);
+    col = mix(prev, fresh, clamp(.02 + kick*.25 + (1.-uChaos)*.05, 0., 1.));
+    col += uAccent * kick * uHeat * .08 * smoothstep(.6, 1., luma(fresh));
+  } else {                              // 9 ripple: kick shockwaves + crawl
+    float r = length(c);
+    float wave = sin(r*(30.+uChaos*40.) - t*6.)*exp(-r*2.5);
+    vec2 dir = c/(r+1e-4);
+    vec2 crawl = (vec2(fbm(uv*5.+t*.2), fbm(uv*5.-t*.2+9.))-.5)*.01*(1.+uChaos*3.);
+    vec2 u2 = uv + dir*wave*(.004 + kick*.03 + bass*.01) + crawl;
+    float fr = .002 + high*.006;
+    col = vec3(img(u2+dir*fr).r, img(u2).g, img(u2-dir*fr).b);
+  }
+
+  // ---- heat: glow pushed through highlights ----
+  col += uAccent * uHeat * (kick*.35 + en*.08) * smoothstep(.45, 1., luma(col));
+  col *= 1. + uHeat*kick*.15;
+
+  // ---- trails: feedback with a slight zoom ----
+  vec2 tz = (vUv-.5)*(1. - .006*(.3+bass)) + .5;
+  col = max(col, texture2D(uPrev, tz).rgb * uTrails);
+  gl_FragColor = vec4(clamp(col, 0., 1.), 1.);
+}`;
+
+const OUT_FS = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uBuf; uniform vec2 uRes; uniform float uHigh, uKick, uBright, uTime;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+void main(){
+  vec2 d = vUv-.5;
+  float fr = .0015 + uHigh*.004 + uKick*.004;
+  vec3 col = vec3(texture2D(uBuf, vUv+d*fr).r, texture2D(uBuf, vUv).g, texture2D(uBuf, vUv-d*fr).b);
+  col *= uBright;
+  col *= mix(.55, 1., smoothstep(.85, .2, length(d*vec2(uRes.x/uRes.y, 1.))));
+  col += (hash(vUv*uRes + fract(uTime)*100.)-.5)*.035;
+  gl_FragColor = vec4(col, 1.);
+}`;
+
+/* ---------------- 2. RENDERER ---------------- */
+const canvas = $('gl');
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias:false }); }
+catch(e){ say('WebGL is not available in this browser, so the visualizer cannot start.'); throw e; }
+const DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+renderer.setPixelRatio(DPR);
+const scene = new THREE.Scene();
+const cam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2));
+quad.frustumCulled = false;
+scene.add(quad);
+
+const rtOpts = { minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, depthBuffer:false };
+let rt = [new THREE.WebGLRenderTarget(4,4,rtOpts), new THREE.WebGLRenderTarget(4,4,rtOpts)];
+let ping = 0;
+
+const U = {
+  uTex:{value:null}, uPrev:{value:null}, uRes:{value:new THREE.Vector2(1,1)}, uTexAspect:{value:1},
+  uTime:{value:0}, uDive:{value:0}, uKickCount:{value:0},
+  uBass:{value:0}, uMid:{value:0}, uHigh:{value:0}, uKick:{value:0}, uEnergy:{value:0},
+  uReact:{value:1}, uChaos:{value:.5}, uTrails:{value:.75}, uHeat:{value:1}, uSym:{value:0}, uTwist:{value:0},
+  uMode:{value:1}, uFlip:{value:1}, uAccent:{value:new THREE.Vector3(1,.37,.64)}
+};
+const OU = { uBuf:{value:null}, uRes:U.uRes, uHigh:U.uHigh, uKick:U.uKick, uBright:{value:1}, uTime:U.uTime };
+const modeMat = new THREE.ShaderMaterial({ uniforms:U, vertexShader:VS, fragmentShader:MODE_FS, depthTest:false, depthWrite:false });
+const outMat  = new THREE.ShaderMaterial({ uniforms:OU, vertexShader:VS, fragmentShader:OUT_FS, depthTest:false, depthWrite:false });
+
+function resize(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  const bw = Math.max(4, Math.round(w*DPR)), bh = Math.max(4, Math.round(h*DPR));
+  rt.forEach(r => r.setSize(bw, bh));
+  U.uRes.value.set(bw, bh);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------------- 3. MEDIA (image / video source) ---------------- */
+let currentVideo = null;
+function prepTex(tex){
+  tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+function setTex(tex, aspect){
+  const old = U.uTex.value;
+  U.uTex.value = prepTex(tex);
+  U.uTexAspect.value = aspect || 1;
+  if (old && old !== tex) old.dispose();
+}
+
+// Downscale big photos so phones don't choke on huge textures
+function canvasFrom(src, w, h, max=2048){
+  const s = Math.min(1, max/Math.max(w,h));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(w*s); cv.height = Math.round(h*s);
+  cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+  return cv;
+}
+
+// Pull the most vivid color from the source and use it as the glow accent
+function extractAccent(src){
+  try{
+    const cv = document.createElement('canvas'); cv.width = cv.height = 24;
+    const x = cv.getContext('2d', { willReadFrequently:true });
+    x.drawImage(src, 0, 0, 24, 24);
+    const d = x.getImageData(0,0,24,24).data;
+    let best = -1, rgb = [1,.37,.64];
+    for (let i=0;i<d.length;i+=4){
+      const r=d[i]/255, g=d[i+1]/255, b=d[i+2]/255;
+      const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+      const score = (mx-mn) * mx;
+      if (score > best){ best = score; rgb = [r,g,b]; }
+    }
+    if (best < .08) rgb = [1,.37,.64];
+    const mx = Math.max(...rgb) || 1;
+    U.uAccent.value.set(rgb[0]/mx, rgb[1]/mx, rgb[2]/mx);
+  }catch(e){ /* cross-origin or decode issue: keep current accent */ }
+}
+
+function makeDefaultImage(){
+  const s = 1024, cv = document.createElement('canvas'); cv.width = cv.height = s;
+  const x = cv.getContext('2d');
+  const sky = x.createLinearGradient(0,0,0,s*.72);
+  sky.addColorStop(0,'#0d0726'); sky.addColorStop(.55,'#4a1066'); sky.addColorStop(1,'#ff5c8a');
+  x.fillStyle = sky; x.fillRect(0,0,s,s);
+  // stars
+  for (let i=0;i<220;i++){ x.fillStyle = `rgba(255,255,255,${Math.random()*.8})`; x.fillRect(Math.random()*s, Math.random()*s*.6, 2, 2); }
+  // sun with cut stripes
+  const sun = x.createLinearGradient(0,s*.25,0,s*.72);
+  sun.addColorStop(0,'#ffe27a'); sun.addColorStop(1,'#ff3d7f');
+  x.save(); x.beginPath(); x.arc(s/2, s*.5, s*.26, 0, Math.PI*2); x.clip();
+  x.fillStyle = sun; x.fillRect(0,0,s,s);
+  x.globalCompositeOperation = 'destination-out';
+  for (let i=0;i<8;i++){ const y = s*.52 + i*i*3.2 + i*14; x.fillRect(0, y, s, 4 + i*2.2); }
+  x.restore();
+  // ground with perspective grid
+  x.fillStyle = '#070b22'; x.fillRect(0, s*.72, s, s*.28);
+  x.strokeStyle = '#5fe3ff'; x.lineWidth = 2; x.globalAlpha = .8;
+  for (let i=-12;i<=12;i++){ x.beginPath(); x.moveTo(s/2 + i*14, s*.72); x.lineTo(s/2 + i*140, s); x.stroke(); }
+  for (let i=0;i<9;i++){ const y = s*.72 + Math.pow(i/8, 2)*s*.28; x.beginPath(); x.moveTo(0,y); x.lineTo(s,y); x.stroke(); }
+  x.globalAlpha = 1;
+  x.fillStyle = '#fff'; x.textAlign = 'center';
+  x.font = '800 86px "Bricolage Grotesque", system-ui, sans-serif';
+  x.fillText('DROP A PHOTO', s/2, s*.17);
+  return cv;
+}
+setTex(new THREE.CanvasTexture(makeDefaultImage()), 1);
+
+function loadMedia(file){
+  if (!file) return;
+  if (file.type.startsWith('audio')) return playFile(file);
+  stopCamera();
+  if (currentVideo){ currentVideo.pause(); URL.revokeObjectURL(currentVideo.src); currentVideo = null; }
+  const url = URL.createObjectURL(file);
+  if (file.type.startsWith('video')){
+    const v = document.createElement('video');
+    v.src = url; v.muted = true; v.loop = true; v.playsInline = true; v.setAttribute('playsinline','');
+    v.addEventListener('loadeddata', () => {
+      setTex(new THREE.VideoTexture(v), v.videoWidth / v.videoHeight);
+      extractAccent(v);
+      say(`Video loaded: <strong>${escapeHtml(file.name)}</strong>. It loops silent; the audio source drives it.`);
+    }, { once:true });
+    v.addEventListener('error', () => say('That video format will not play in this browser. Try an H.264 MP4.'), { once:true });
+    v.play().catch(()=>{});
+    currentVideo = v;
+  } else {
+    const im = new Image();
+    im.onload = () => {
+      const cv = canvasFrom(im, im.naturalWidth, im.naturalHeight);
+      setTex(new THREE.CanvasTexture(cv), cv.width / cv.height);
+      extractAccent(cv);
+      URL.revokeObjectURL(url);
+      say(`Image loaded: <strong>${escapeHtml(file.name)}</strong>.`);
+    };
+    im.onerror = () => say('That image format will not open here. Export it as JPEG or PNG and try again.');
+    im.src = url;
+  }
+}
+// ---- live camera as the source ----
+let camStream = null, camFacing = 'user';
+function stopCamera(){
+  if (camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  $('btnCam').classList.remove('on'); $('btnCam').textContent = 'Camera';
+  U.uFlip.value = 1;
+}
+async function startCamera(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    say('This browser has no camera access here. Open Morphwave from GitHub Pages or localhost.'); return;
+  }
+  stopCamera();
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:camFacing, width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    if (currentVideo){ currentVideo.pause(); if (currentVideo.src && currentVideo.src.startsWith('blob:')) URL.revokeObjectURL(currentVideo.src); currentVideo = null; }
+    camStream = stream;
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.setAttribute('playsinline',''); v.srcObject = stream;
+    await v.play();
+    currentVideo = v;
+    const go = () => { setTex(new THREE.VideoTexture(v), (v.videoWidth||16)/(v.videoHeight||9)); extractAccent(v); };
+    if (v.videoWidth) go(); else v.addEventListener('loadedmetadata', go, { once:true });
+    U.uFlip.value = camFacing === 'user' ? -1 : 1;   // mirror the selfie cam
+    $('btnCam').classList.add('on'); $('btnCam').textContent = 'Flip camera';
+    setMode(9);
+    say('Camera on. Tap <strong>Flip camera</strong> to switch sides, or load an image to turn it off.');
+  }catch(e){
+    say('The camera is blocked or was denied. Check the browser\'s camera permission for this site and try again.');
+  }
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------------- 4. AUDIO ---------------- */
+const A = {
+  ctx:null, master:null, analyser:null, freq:null, src:'none',
+  demoTimer:null, audioEl:null, fileNode:null, micStream:null, micNode:null, noiseBuf:null,
+  bass:0, mid:0, high:0, energy:0, kick:0, kickCount:0,
+  peaks:[.2,.2,.2], prevBass:0, fluxAvg:.02, lastKick:0
+};
+
+function ensureCtx(){
+  if (A.ctx){ if (A.ctx.state === 'suspended') A.ctx.resume(); return; }
+  const C = window.AudioContext || window.webkitAudioContext;
+  A.ctx = new C();
+  A.analyser = A.ctx.createAnalyser();
+  A.analyser.fftSize = 2048; A.analyser.smoothingTimeConstant = .55;
+  A.freq = new Uint8Array(A.analyser.frequencyBinCount);
+  // master -> speakers, master -> analyser. Analyser drains into a silent gain so mic never feeds back.
+  A.master = A.ctx.createGain();
+  A.master.connect(A.ctx.destination);
+  A.master.connect(A.analyser);
+  const sink = A.ctx.createGain(); sink.gain.value = 0;
+  A.analyser.connect(sink); sink.connect(A.ctx.destination);
+  // one second of white noise for hats/claps
+  const n = A.ctx.sampleRate; A.noiseBuf = A.ctx.createBuffer(1, n, n);
+  const ch = A.noiseBuf.getChannelData(0); for (let i=0;i<n;i++) ch[i] = Math.random()*2-1;
+}
+
+function stopSources(){
+  if (A.demoTimer){ clearInterval(A.demoTimer); A.demoTimer = null; }
+  if (A.audioEl){ A.audioEl.pause(); try{ A.fileNode.disconnect(); }catch(e){} URL.revokeObjectURL(A.audioEl.src); A.audioEl = null; A.fileNode = null; }
+  if (A.micStream){ A.micStream.getTracks().forEach(t => t.stop()); try{ A.micNode.disconnect(); }catch(e){} A.micStream = null; }
+  A.src = 'none';
+  $('btnDemo').classList.remove('on'); $('btnDemo').textContent = 'Play demo beat';
+  $('btnMic').classList.remove('on');
+}
+
+// ---- built-in demo track: 124 BPM, A minor-ish ----
+const midiHz = m => 440*Math.pow(2,(m-69)/12);
+const BPM = 124, STEP = 60/BPM/4;
+let nextT = 0, stepI = 0;
+function kickDrum(t){
+  const o = A.ctx.createOscillator(), g = A.ctx.createGain();
+  o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(42, t+.12);
+  g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(.001, t+.42);
+  o.connect(g); g.connect(A.master); o.start(t); o.stop(t+.45);
+}
+function noiseHit(t, freq, type, vol, len){
+  const s = A.ctx.createBufferSource(); s.buffer = A.noiseBuf;
+  const f = A.ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+  const g = A.ctx.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t+len);
+  s.connect(f); f.connect(g); g.connect(A.master); s.start(t, Math.random()*.5); s.stop(t+len+.02);
+}
+function bassNote(hz, t, len){
+  const o = A.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz;
+  const f = A.ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = 6;
+  f.frequency.setValueAtTime(1400, t); f.frequency.exponentialRampToValueAtTime(180, t+len);
+  const g = A.ctx.createGain(); g.gain.setValueAtTime(.22, t); g.gain.exponentialRampToValueAtTime(.001, t+len);
+  o.connect(f); f.connect(g); g.connect(A.master); o.start(t); o.stop(t+len+.02);
+}
+function pad(root, t, len){
+  [12,15,19,24].forEach((iv,i) => {
+    const o = A.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = midiHz(root+iv); o.detune.value = (i%2?7:-7);
+    const f = A.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1100;
+    const g = A.ctx.createGain(); g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(.035, t+len*.3); g.gain.linearRampToValueAtTime(.0001, t+len);
+    o.connect(f); f.connect(g); g.connect(A.master); o.start(t); o.stop(t+len+.05);
+  });
+}
+const ROOTS = [45, 45, 41, 43];
+const BASS_PAT = [1,0,0,1, 0,0,1,0, 1,0,0,1, 0,1,0,0];
+function playStep(i, t){
+  const s = i % 16, bar = Math.floor(i/16) % 4;
+  if (s % 4 === 0) kickDrum(t);
+  if (s % 4 === 2) noiseHit(t, 7500, 'highpass', .22, .08); else if (s % 2 === 1) noiseHit(t, 9000, 'highpass', .07, .03);
+  if (s === 4 || s === 12) noiseHit(t, 1500, 'bandpass', .5, .18);
+  if (BASS_PAT[s]) bassNote(midiHz(ROOTS[bar] + (s === 13 ? 12 : 0)), t, STEP*1.6);
+  if (s === 0) pad(ROOTS[bar], t, STEP*16);
+}
+function startDemo(){
+  ensureCtx(); stopSources();
+  nextT = A.ctx.currentTime + .05; stepI = 0;
+  A.demoTimer = setInterval(() => {
+    while (nextT < A.ctx.currentTime + .12){ playStep(stepI, nextT); nextT += STEP; stepI = (stepI+1) % 64; }
+  }, 25);
+  A.src = 'demo';
+  $('btnDemo').classList.add('on'); $('btnDemo').textContent = 'Stop demo';
+  say('Demo beat playing. Try <strong>shatter</strong> or <strong>infinite</strong>, and push React and Heat.');
+}
+
+function playFile(file){
+  ensureCtx(); stopSources();
+  const el = new Audio(); el.src = URL.createObjectURL(file); el.loop = true;
+  A.fileNode = A.ctx.createMediaElementSource(el); A.fileNode.connect(A.master);
+  el.play().catch(() => say('Tap anywhere on the controls, then try the audio file again.'));
+  A.audioEl = el; A.src = 'file';
+  say(`Playing <strong>${escapeHtml(file.name)}</strong> on loop.`);
+}
+
+async function startMic(){
+  ensureCtx(); stopSources();
+  try{
+    A.micStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false } });
+    A.micNode = A.ctx.createMediaStreamSource(A.micStream);
+    A.micNode.connect(A.analyser);
+    A.src = 'mic'; $('btnMic').classList.add('on');
+    say('Listening to the mic. Play something loud near it.');
+  }catch(e){
+    say('The mic is blocked or was denied. Check the browser\'s microphone permission for this site and try again.');
+  }
+}
+
+// average of FFT bins between two frequencies, 0..1
+function band(lo, hi){
+  const nyq = A.ctx.sampleRate/2, N = A.freq.length;
+  const a = Math.max(1, Math.floor(lo/nyq*N)), b = Math.min(N-1, Math.ceil(hi/nyq*N));
+  let s = 0; for (let i=a;i<=b;i++) s += A.freq[i];
+  return s / ((b-a+1)*255);
+}
+const lerp = (a,b,t) => a + (b-a)*t;
+
+function analyze(dt, now){
+  const f = dt*60;
+  if (!A.ctx || A.src === 'none'){
+    // idle: gentle breathing so the picture is alive before any sound
+    const t = now/1000;
+    A.bass = lerp(A.bass, .25 + .15*Math.sin(t*1.1), .05);
+    A.mid  = lerp(A.mid,  .2 + .1*Math.sin(t*.7+1), .05);
+    A.high = lerp(A.high, .1, .05);
+    A.energy = (A.bass + A.mid + A.high)/3;
+    A.kick *= Math.pow(.9, f);
+    return;
+  }
+  A.analyser.getByteFrequencyData(A.freq);
+  const raw = [band(25,140), band(140,1800), band(1800,10000)];
+  const norm = raw.map((v,k) => {
+    A.peaks[k] = Math.max(A.peaks[k]*Math.pow(.997, f), v, .05);  // auto-gain
+    return Math.pow(v / A.peaks[k], 1.6);
+  });
+  const sm = (cur, v) => v > cur ? lerp(cur, v, .6) : lerp(cur, v, .12);  // fast attack, slow release
+  A.bass = sm(A.bass, norm[0]); A.mid = sm(A.mid, norm[1]); A.high = sm(A.high, norm[2]);
+  A.energy = (A.bass + A.mid + A.high)/3;
+
+  // kick = sudden rise in low end (spectral flux on the bass band)
+  const flux = Math.max(0, raw[0] - A.prevBass); A.prevBass = raw[0];
+  A.fluxAvg = A.fluxAvg*.95 + flux*.05;
+  if (flux > A.fluxAvg*2.5 + .015 && norm[0] > .5 && now - A.lastKick > 140){
+    A.kick = 1; A.kickCount++; A.lastKick = now;
+  }
+  A.kick *= Math.pow(.86, f);
+}
+
+/* ---------------- 5. UI ---------------- */
+const MODES = ['none','smear','droste','shatter','prism','infinite','halftone','solar','melt','ripple'];
+const modesEl = $('modes');
+MODES.forEach((name, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'chip'; b.dataset.mode = i;
+  b.innerHTML = `<b>${i}</b>${name}`;
+  b.addEventListener('click', () => setMode(i));
+  modesEl.appendChild(b);
+});
+function setMode(i){
+  U.uMode.value = i;
+  $('modeName').textContent = MODES[i];
+  [...modesEl.children].forEach(c => c.classList.toggle('on', +c.dataset.mode === i));
+}
+setMode(1);
+
+const SLIDERS = [
+  { id:'react',    label:'React',    min:0,  max:2,   step:.01, val:1,   u:U.uReact },
+  { id:'chaos',    label:'Chaos',    min:0,  max:1,   step:.01, val:.5,  u:U.uChaos },
+  { id:'trails',   label:'Trails',   min:0,  max:.97, step:.01, val:.75, u:U.uTrails },
+  { id:'heat',     label:'Heat',     min:0,  max:2,   step:.01, val:1,   u:U.uHeat },
+  { id:'symmetry', label:'Symmetry', min:0,  max:12,  step:1,   val:0,   u:U.uSym },
+  { id:'twist',    label:'Twist',    min:-2, max:2,   step:.01, val:0,   u:U.uTwist },
+  { id:'bright',   label:'Bright',   min:.5, max:2,   step:.01, val:1,   u:OU.uBright },
+];
+const slidersEl = $('sliders');
+SLIDERS.forEach(s => {
+  const w = document.createElement('div'); w.className = 'sl';
+  w.innerHTML = `<label for="sl-${s.id}">${s.label}<output id="o-${s.id}"></output></label>
+    <input id="sl-${s.id}" type="range" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.val}">`;
+  slidersEl.appendChild(w);
+  const inp = w.querySelector('input'), out = w.querySelector('output');
+  const apply = () => { s.u.value = +inp.value; out.textContent = s.step >= 1 ? inp.value : (+inp.value).toFixed(2); };
+  inp.addEventListener('input', apply);
+  inp.addEventListener('dblclick', () => { inp.value = s.val; apply(); });
+  s.input = inp; s.apply = apply; apply();
+});
+
+function shuffle(){
+  setMode(1 + Math.floor(Math.random()*(MODES.length-1)));
+  const set = (id, v) => { const s = SLIDERS.find(x => x.id === id); s.input.value = v; s.apply(); };
+  set('chaos', (Math.random()*.9+.1).toFixed(2));
+  set('trails', (Math.random()*.9).toFixed(2));
+  set('heat', (Math.random()*1.6+.3).toFixed(2));
+  set('symmetry', Math.random() < .35 ? Math.floor(Math.random()*8) : 0);
+  set('twist', Math.random() < .3 ? (Math.random()*2-1).toFixed(2) : 0);
+}
+
+$('btnDemo').addEventListener('click', () => { if (A.src === 'demo') stopSources(); else startDemo(); });
+$('btnMic').addEventListener('click', () => { if (A.src === 'mic') stopSources(); else startMic(); });
+$('btnShuffle').addEventListener('click', shuffle);
+$('btnCam').addEventListener('click', () => {
+  if (camStream) camFacing = camFacing === 'user' ? 'environment' : 'user';
+  startCamera();
+});
+$('inAudio').addEventListener('change', e => { playFile(e.target.files[0]); e.target.value = ''; });
+$('inMedia').addEventListener('change', e => { loadMedia(e.target.files[0]); e.target.value = ''; });
+
+const dock = $('dock'), showBtn = $('btnShow');
+function setUi(visible){ dock.hidden = !visible; showBtn.hidden = visible; }
+$('btnHide').addEventListener('click', () => setUi(false));
+showBtn.addEventListener('click', () => setUi(true));
+canvas.addEventListener('click', () => setUi(dock.hidden));
+
+// drag & drop anywhere
+const drop = $('drop');
+window.addEventListener('dragover', e => { e.preventDefault(); drop.hidden = false; });
+window.addEventListener('dragleave', e => { if (e.target === document.documentElement || !e.relatedTarget) drop.hidden = true; });
+window.addEventListener('drop', e => {
+  e.preventDefault(); drop.hidden = true;
+  [...e.dataTransfer.files].forEach(loadMedia);
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (/^[0-9]$/.test(e.key)) setMode(+e.key);
+  else if (e.key === 'x') shuffle();
+  else if (e.key === 'h') setUi(dock.hidden);
+  else if (e.key === ' '){ e.preventDefault(); A.src === 'demo' ? stopSources() : startDemo(); }
+});
+
+/* ---------------- 6. LOOP ---------------- */
+const meters = [$('mB'), $('mM'), $('mH'), $('mK')];
+let last = performance.now(), dive = 0;
+function frame(now){
+  const dt = Math.min(.05, (now - last)/1000); last = now;
+  analyze(dt, now);
+
+  dive += dt*(.12 + A.energy*.35*U.uReact.value) + dt*A.kick*1.2*U.uReact.value;
+  U.uTime.value = now/1000; U.uDive.value = dive; U.uKickCount.value = A.kickCount % 1000;
+  U.uBass.value = A.bass; U.uMid.value = A.mid; U.uHigh.value = A.high; U.uKick.value = A.kick; U.uEnergy.value = A.energy;
+  if (currentVideo && U.uTex.value) U.uTex.value.needsUpdate = true;
+
+  const read = rt[ping], write = rt[1-ping];
+  U.uPrev.value = read.texture;
+  quad.material = modeMat; renderer.setRenderTarget(write); renderer.render(scene, cam);
+  OU.uBuf.value = write.texture;
+  quad.material = outMat; renderer.setRenderTarget(null); renderer.render(scene, cam);
+  ping = 1 - ping;
+
+  [A.bass, A.mid, A.high, A.kick].forEach((v,i) => meters[i].style.transform = `scaleY(${Math.max(.05, Math.min(1, v))})`);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
